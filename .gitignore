@@ -1,2 +1,3 @@
 /vendor/
 /bin/composer-fix-conflicts.phar
+.phpunit.result.cache
