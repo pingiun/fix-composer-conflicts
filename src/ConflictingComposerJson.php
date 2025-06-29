@@ -21,11 +21,12 @@ final readonly class ConflictingComposerJson
 
     public function __construct(
         string $base,
-        string $ours, string $theirs
+        string $ours,
+        string $theirs
     ) {
-        $this->base = json_decode($base, true);
-        $this->ours = json_decode($ours, true);
-        $this->theirs = json_decode($theirs, true);
+        $this->base = json_decode($base, true, flags: JSON_THROW_ON_ERROR);
+        $this->ours = json_decode($ours, true, flags: JSON_THROW_ON_ERROR);
+        $this->theirs = json_decode($theirs, true, flags: JSON_THROW_ON_ERROR);
     }
 
     /**
