@@ -84,7 +84,7 @@ final readonly class ConflictingComposerJson
             if ($baseVersion === $oursVersion && $baseVersion === $theirsVersion) {
                 continue;
             }
-            $diffs[] = new PackageDiff($packageName, $baseVersion, $oursVersion, $theirsVersion);
+            $diffs[] = new PackageDiff($packageName, $baseVersion, $oursVersion, $theirsVersion, isDevDependency: $key === 'require-dev');
         }
 
         return $diffs;

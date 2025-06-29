@@ -7,22 +7,17 @@ use Composer\Semver\VersionParser;
 final readonly class DiffResolution
 {
     public function __construct(
-        public PackageDiff      $diff,
+        public PackageDiff $diff,
         public ResolutionChoice $choice,
-        public ?string          $newVersion = null,
-    )
-    {
-    }
+        public ?string $newVersion = null,
+        public bool $isDevDependency = false,
+    ) {}
 
     public function getAction(): string
     {
         return match ($this->choice) {
-            ResolutionChoice::OURS => 'require',
-            ResolutionChoice::BASE => 'require',
-            ResolutionChoice::THEIRS => 'require',
-            ResolutionChoice::NEWEST => 'require',
+            ResolutionChoice::OURS, ResolutionChoice::BASE, ResolutionChoice::THEIRS, ResolutionChoice::NEWEST, ResolutionChoice::MANUAL => 'require',
             ResolutionChoice::REMOVE => 'remove',
-            ResolutionChoice::MANUAL => 'require',
             ResolutionChoice::ABORT => throw new \LogicException('Cannot resolve diff with abort choice'),
         };
     }
@@ -45,23 +40,23 @@ final readonly class DiffResolution
     }
 
     /**
-     * @param string[] $array
-     * @return string
+     * @param  array<?string>  $array
      */
     private static function getNewestVersion(array $array): string
     {
         // Return the version with the highest minimum bound
-        $versionParser = new VersionParser();
+        $versionParser = new VersionParser;
         $highestVersion = null;
         foreach ($array as $version) {
-            if (null === $version) {
+            if ($version === null) {
                 continue;
             }
             $parsedVersion = $versionParser->parseConstraints($version);
-            if (null === $highestVersion || $parsedVersion->getLowerBound() > $highestVersion->getLowerBound()) {
+            if ($highestVersion === null || $parsedVersion->getLowerBound() > $highestVersion->getLowerBound()) {
                 $highestVersion = $parsedVersion;
             }
         }
+
         return $highestVersion->getPrettyString();
     }
 }

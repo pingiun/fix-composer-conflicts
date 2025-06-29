@@ -9,6 +9,7 @@ final readonly class PackageDiff
         public ?string $baseVersion,
         public ?string $oursVersion,
         public ?string $theirsVersion,
+        public bool $isDevDependency = false,
     ) {}
 
     public function getDiffType(): DiffType

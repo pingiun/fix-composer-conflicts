@@ -18,7 +18,6 @@ use Symfony\Component\Process\Process;
 
 final class FixConflictsCommand extends Command
 {
-
     #[Override]
     protected function configure(): void
     {
@@ -60,7 +59,9 @@ final class FixConflictsCommand extends Command
         /** @var QuestionHelper $helper */
         $helper = $this->getHelper('question');
 
-        $allDiffs = $composerJsons->getRequireDiffs();
+        $requireDiffs = $composerJsons->getRequireDiffs();
+        $requireDevDiffs = $composerJsons->getRequireDevDiffs();
+        $allDiffs = array_merge($requireDiffs, $requireDevDiffs);
         $resolutions = [];
         foreach ($allDiffs as $i => $diff) {
             $manualVersion = null;
@@ -115,7 +116,7 @@ final class FixConflictsCommand extends Command
 
                 return 0;
             }
-            $resolutions[] = new DiffResolution($diff, $choice, $manualVersion);
+            $resolutions[] = new DiffResolution($diff, $choice, $manualVersion, $diff->isDevDependency);
         }
 
         $output->writeln('');
@@ -299,12 +300,26 @@ final class FixConflictsCommand extends Command
     {
         self::procGetOutput($command);
     }
+
+    /**
+     * @return string[]
+     */
     private static function buildCommand(DiffResolution $resolution)
     {
         $action = $resolution->getAction();
+        $package = $resolution->getPackage();
+
         if ($action === 'remove') {
-            return ['composer', $action, $resolution->getPackage()];
+            return ['composer', $action, $package];
         }
-        return ['composer', $action, $resolution->getPackage(), $resolution->getVersion()];
+
+        $command = ['composer', $action];
+        if ($resolution->isDevDependency) {
+            $command[] = '--dev';
+        }
+        $command[] = $package;
+        $command[] = $resolution->getVersion();
+
+        return $command;
     }
 }
