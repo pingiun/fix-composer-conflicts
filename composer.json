@@ -1,5 +1,5 @@
 {
-  "name": "pingiun/composer-fix-conflicts",
+  "name": "pingiun/fix-composer-conflicts",
   "version": "0.1.0",
   "type": "project",
   "authors": [
@@ -31,7 +31,7 @@
     }
   },
   "bin": [
-    "bin/composer-fix-conflicts"
+    "bin/fix-composer-conflicts"
   ],
   "config": {
     "allow-plugins": {

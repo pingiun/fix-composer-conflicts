@@ -3,7 +3,7 @@
 set -euo pipefail
 
 source "$(dirname "$0")/lib.sh"
-FIX_CONFLICTS_CMD=$(realpath "$(dirname "$0")/../../bin/composer-fix-conflicts")
+FIX_CONFLICTS_CMD=$(realpath "$(dirname "$0")/../../bin/fix-composer-conflicts")
 
 setUp
 trap 'tearDown' EXIT
