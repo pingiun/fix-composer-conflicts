@@ -2,7 +2,8 @@
 
 namespace Pingiun\FixConflicts;
 
-enum ResolutionChoice{
+enum ResolutionChoice
+{
     case OURS;
     case BASE;
     case THEIRS;

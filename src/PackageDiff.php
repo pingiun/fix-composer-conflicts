@@ -2,18 +2,14 @@
 
 namespace Pingiun\FixConflicts;
 
-use Composer\Semver\Comparator;
-use Composer\Semver\Constraint\Constraint;
-
-final class PackageDiff {
+final readonly class PackageDiff
+{
     public function __construct(
         public string $name,
         public ?string $baseVersion,
         public ?string $oursVersion,
         public ?string $theirsVersion,
-    )
-    {
-    }
+    ) {}
 
     public function getDiffType(): DiffType
     {
@@ -36,7 +32,7 @@ final class PackageDiff {
         if ($this->theirsVersion === null) {
             return DiffType::DELETE_THEIRS;
         }
-        $versionParser = new \Composer\Semver\VersionParser();
+        $versionParser = new \Composer\Semver\VersionParser;
         $baseConstraint = $versionParser->parseConstraints($this->baseVersion);
         $oursConstraint = $versionParser->parseConstraints($this->oursVersion);
         $theirsConstraint = $versionParser->parseConstraints($this->theirsVersion);
@@ -64,6 +60,6 @@ final class PackageDiff {
         if ($theirsConstraint->getLowerBound()->compareTo($baseConstraint->getLowerBound(), '<')) {
             return DiffType::DOWNGRADE_THEIRS;
         }
-        throw new \RuntimeException("Unreachable");
+        throw new \RuntimeException('Unreachable');
     }
 }

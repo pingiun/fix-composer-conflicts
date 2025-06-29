@@ -2,24 +2,31 @@
 
 namespace Pingiun\FixConflicts;
 
+use Composer\Semver\VersionParser;
+use Override;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\Question;
 use Symfony\Component\Console\Terminal;
+use Symfony\Component\Process\Exception\ProcessSignaledException;
+use Symfony\Component\Process\Exception\ProcessStartFailedException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
+use Symfony\Component\Process\Exception\RuntimeException;
 use Symfony\Component\Process\Process;
 
 final class FixConflictsCommand extends Command
 {
-    #[\Override]
+
+    #[Override]
     protected function configure(): void
     {
         $this->setName('fix-conflicts');
         $this->setDescription('Difficulty merging a branch that also changed composer.json? Run composer fix-conflicts. (No command line options needed, this is an interactive command)');
     }
 
-    #[\Override]
+    #[Override]
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $terminal = new Terminal;
@@ -46,22 +53,26 @@ final class FixConflictsCommand extends Command
             return 1;
         }
 
+        $oursCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', 'HEAD']));
+        $theirsCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', $conflictSource->getHeadName()]));
+
         $printer = new ThreeColumnPrinter($terminalWidth, $output);
         /** @var QuestionHelper $helper */
         $helper = $this->getHelper('question');
 
         $allDiffs = $composerJsons->getRequireDiffs();
+        $resolutions = [];
         foreach ($allDiffs as $i => $diff) {
-            $i = $i + 1;
+            $manualVersion = null;
             $output->writeln('');
             $output->writeln(self::sprintfn($diff->getDiffType()->getHelpText(), ['packageName' => $diff->name]));
             $printer->printDiff($diff);
             $output->writeln('');
-            $choice = ResolutionChoice::OURS;
             while (true) {
-                $answer = $helper->ask($input, $output, new Question(sprintf('<fg=blue>(%s/%s) How to resolve [o,b,t,n,r,m,a,?]?</> ', $i, count($allDiffs))));;
+                $answer = $helper->ask($input, $output, new Question(sprintf('<fg=blue>(%s/%s) How to resolve [o,b,t,n,r,m,a,?]?</> ', $i + 1, count($allDiffs))));
                 if ($answer === null) {
                     $output->writeln('ours/base/theirs/newest/remove/manual/abort/help');
+
                     continue;
                 } elseif (preg_match('/^o|ou|our|ours$/i', $answer)) {
                     $choice = ResolutionChoice::OURS;
@@ -75,6 +86,10 @@ final class FixConflictsCommand extends Command
                     $choice = ResolutionChoice::REMOVE;
                 } elseif (preg_match('/^m|ma|man|manu|manua|manual$/i', $answer)) {
                     $choice = ResolutionChoice::MANUAL;
+                    $manualVersion = self::getManualVersion($input, $output, $helper);
+                    if ($manualVersion === null) {
+                        continue;
+                    }
                 } elseif (preg_match('/^a|ab|abo|abor|abort$/i', $answer)) {
                     $choice = ResolutionChoice::ABORT;
                 } elseif (preg_match('/^\?|help$/i', $answer)) {
@@ -86,18 +101,57 @@ final class FixConflictsCommand extends Command
                     $output->writeln('<info>m - manually set the version for this package</info>');
                     $output->writeln('<info>a - abort</info>');
                     $output->writeln('<info>? - show this help</info>');
+
                     continue;
                 } else {
                     $output->writeln("One of the letters is expected, got '$answer'");
+
                     continue;
                 }
                 break;
             }
             if ($choice === ResolutionChoice::ABORT) {
                 $output->writeln('Aborting, conflict markers will be left in place');
+
                 return 0;
             }
+            $resolutions[] = new DiffResolution($diff, $choice, $manualVersion);
         }
+
+        $output->writeln('');
+        $output->writeln('<info>Applying '.count($resolutions).' resolutions</info>');
+        $mostUsed = array_count_values(array_map(fn (DiffResolution $x) => $x->choice->name, $resolutions));
+        if (
+            ($mostUsed[ResolutionChoice::OURS->name] ?? 0) >= ($mostUsed[ResolutionChoice::THEIRS->name] ?? 0)
+        ) {
+            $packageSetBase = ResolutionChoice::OURS;
+            self::procMustSucceed(['git', 'restore', "--source={$oursCommit}", '--', 'composer.json', 'composer.lock']);
+        } else {
+            $packageSetBase = ResolutionChoice::THEIRS;
+            self::procMustSucceed(['git', 'restore', "--source={$theirsCommit}", '--', 'composer.json', 'composer.lock']);
+        }
+
+        try {
+            foreach ($resolutions as $resolution) {
+                if ($resolution->choice === $packageSetBase) {
+                    continue;
+                }
+                self::procMustSucceed(self::buildCommand($resolution));
+            }
+        } catch (ProcessFailedException $e) {
+            $output->writeln('Failed to apply resolutions, aborting');
+            $output->writeln($e->getNiceMessage());
+            $output->writeln($e->output);
+
+            // Restore conflict markers
+            self::procMustSucceed(['git', 'restore', '--merge', '--', 'composer.json', 'composer.lock']);
+        }
+
+        // If everything went well, add the two files to the index
+        self::procMustSucceed(['git', 'add', '--', 'composer.json', 'composer.lock']);
+
+        $output->writeln('');
+        $output->writeln('<info>Conflicts resolved, you can now commit</info>');
 
         return 0;
     }
@@ -107,9 +161,7 @@ final class FixConflictsCommand extends Command
      */
     private static function chdirToRepo(): void
     {
-        $process = new Process(['git', 'rev-parse', '--show-toplevel']);
-        $process->run();
-        $newCwd = trim($process->getOutput());
+        $newCwd = trim(self::procGetOutput(['git', 'rev-parse', '--show-toplevel']));
         chdir($newCwd);
     }
 
@@ -118,9 +170,7 @@ final class FixConflictsCommand extends Command
      */
     private static function isConflicting(): bool
     {
-        $process = new Process(['git', 'diff', '--name-only', '--diff-filter=U', '--no-relative']);
-        $process->run();
-        $output = $process->getOutput();
+        $output = self::procGetOutput(['git', 'diff', '--name-only', '--diff-filter=U', '--no-relative']);
         $lines = explode(PHP_EOL, $output);
         $foundJson = in_array('composer.json', $lines);
         $foundLock = in_array('composer.lock', $lines);
@@ -150,15 +200,9 @@ final class FixConflictsCommand extends Command
 
     private static function getBothComposerJsons(): ConflictingComposerJson
     {
-        $process = new Process(['git', 'show', ':1:composer.json']);
-        $process->run();
-        $base = $process->getOutput();
-        $process = new Process(['git', 'show', ':2:composer.json']);
-        $process->run();
-        $ours = $process->getOutput();
-        $process = new Process(['git', 'show', ':3:composer.json']);
-        $process->run();
-        $theirs = $process->getOutput();
+        $base = self::procGetOutput(['git', 'show', ':1:composer.json']);
+        $ours = self::procGetOutput(['git', 'show', ':2:composer.json']);
+        $theirs = self::procGetOutput(['git', 'show', ':3:composer.json']);
 
         return new ConflictingComposerJson($base, $ours, $theirs);
     }
@@ -201,5 +245,66 @@ final class FixConflictsCommand extends Command
         }
 
         return vsprintf($format, array_values($args));
+    }
+
+    private static function getManualVersion(InputInterface $input, OutputInterface $output, QuestionHelper $helper): ?string
+    {
+        while (true) {
+            $version = $helper->ask($input, $output, new Question('Enter the version you want to set for this package: '));
+            if ($version === null) {
+                return null;
+            }
+            $versionParser = new VersionParser;
+            try {
+                $versionParser->parseConstraints($version);
+
+                return $version;
+            } catch (\Throwable $e) {
+                $output->writeln($e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * @param  string[]  $command
+     * @return string the process output
+     *
+     * @throws ProcessFailedException When the process exited with a nonzero exit code
+     * @throws ProcessStartFailedException When process can't be launched
+     * @throws RuntimeException When process is already running
+     * @throws ProcessTimedOutException When process timed out
+     * @throws ProcessSignaledException When process stopped after receiving signal
+     */
+    private static function procGetOutput(array $command): string
+    {
+        $process = new Process($command);
+        $ret = $process->run();
+        if ($ret !== 0) {
+            throw new ProcessFailedException(implode(' ', $command), $process->getOutput().PHP_EOL.$process->getErrorOutput(), 'Command '.implode(' ', $command).' failed');
+        }
+
+        return $process->getOutput();
+    }
+
+    /**
+     * @param  string[]  $command
+     *
+     * @throws ProcessFailedException When the process exited with a nonzero exit code
+     * @throws ProcessStartFailedException When process can't be launched
+     * @throws RuntimeException When process is already running
+     * @throws ProcessTimedOutException When process timed out
+     * @throws ProcessSignaledException When process stopped after receiving signal
+     */
+    private static function procMustSucceed(array $command): void
+    {
+        self::procGetOutput($command);
+    }
+    private static function buildCommand(DiffResolution $resolution)
+    {
+        $action = $resolution->getAction();
+        if ($action === 'remove') {
+            return ['composer', $action, $resolution->getPackage()];
+        }
+        return ['composer', $action, $resolution->getPackage(), $resolution->getVersion()];
     }
 }

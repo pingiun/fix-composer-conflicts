@@ -5,7 +5,7 @@ namespace Pingiun\FixConflicts;
 use Symfony\Component\Console\Formatter\OutputFormatterStyle;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class ThreeColumnPrinter
+final readonly class ThreeColumnPrinter
 {
     private OutputInterface $output;
 

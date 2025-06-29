@@ -13,6 +13,7 @@ final readonly class ConflictingComposerJson
      * @var array<string, mixed>
      */
     private array $theirs;
+
     /**
      * @var array<string, mixed>
      */
@@ -69,7 +70,6 @@ final readonly class ConflictingComposerJson
     }
 
     /**
-     * @param string $key
      * @return PackageDiff[]
      */
     private function getDiffsWithinArray(string $key): array
@@ -86,6 +86,7 @@ final readonly class ConflictingComposerJson
             }
             $diffs[] = new PackageDiff($packageName, $baseVersion, $oursVersion, $theirsVersion);
         }
+
         return $diffs;
     }
 }
