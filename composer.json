@@ -2,6 +2,7 @@
   "name": "pingiun/fix-composer-conflicts",
   "version": "0.1.0",
   "type": "project",
+  "license": "EUPL-1.2",
   "authors": [
     {
       "name": "Jelle Besseling",
