@@ -1,3 +1,3 @@
 #!/bin/bash
 # Run the tests
-vendor/bin/phpunit tests/ThreeColumnPrinterTest.php
+vendor/bin/phpunit --display-phpunit-deprecations tests/ThreeColumnPrinterTest.php

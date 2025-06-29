@@ -74,7 +74,7 @@ class ThreeColumnPrinterTest extends TestCase
     /**
      * Data provider for terminal widths
      */
-    public function terminalWidthProvider(): array
+    public static function terminalWidthProvider(): array
     {
         return [
             'Minimum terminal width (80)' => [80],

@@ -101,11 +101,29 @@ class ThreeColumnPrinter
 
         // Calculate the maximum width for each column's content
         // We need to account for the border characters and padding
-        $maxContentWidth = max(1, intval(($this->terminalWidth - 10) / 3));
+        // The total width is terminalWidth, and we need to subtract 4 for the border characters (│)
+        // Then divide by 3 for the three columns
+        $maxContentWidth = max(1, intval(($this->terminalWidth - 4) / 3));
 
-        // Truncate package name and versions to fit within the column
-        $nameMaxWidth = max(1, intval($maxContentWidth / 2));
-        $versionMaxWidth = max(1, $maxContentWidth - $nameMaxWidth - 7); // 7 for the quotes, colon, and comma
+        // For each column, we need to ensure the total content (name + version + formatting) fits
+        // within maxContentWidth. We'll allocate space for the version first, then use remaining
+        // space for the name.
+
+        // Get the actual width of each version
+        $oursVersionWidth = mb_strlen($diff->oursVersion ?? '');
+        $baseVersionWidth = mb_strlen($diff->baseVersion ?? '');
+        $theirsVersionWidth = mb_strlen($diff->theirsVersion ?? '');
+
+        // Calculate the maximum allowed version width
+        // We need to leave at least 1 character for the name and 7 for quotes, colon, and comma
+        $maxAllowedVersionWidth = max(1, intval($maxContentWidth / 2));
+
+        // Use the actual version width if it fits, otherwise use the maximum allowed
+        $versionMaxWidth = min(max($oursVersionWidth, $baseVersionWidth, $theirsVersionWidth), $maxAllowedVersionWidth);
+
+        // Allocate remaining space to the package name
+        // The total content width must not exceed maxContentWidth
+        $nameMaxWidth = max(1, $maxContentWidth - $versionMaxWidth - 7); // 7 for the quotes, colon, and comma
 
         // Format the content for each column
         $oursContent = $diff->oursVersion === null ?
@@ -137,17 +155,17 @@ class ThreeColumnPrinter
         $lines[] = sprintf('│%s%s%s│%s%s%s│%s%s%s│',
             str_repeat(' ', $oursLeftPad),
             $diff->oursVersion === null
-                ? '-'
+                ? '<fg=gray>-</>'
                 : $this->formatColumnContentWithTags($diff->name, $diff->oursVersion, $nameMaxWidth, $versionMaxWidth),
             str_repeat(' ', $oursRightPad),
             str_repeat(' ', $baseLeftPad),
             $diff->baseVersion === null
-                ? '-'
+                ? '<fg=gray>-</>'
                 : $this->formatColumnContentWithTags($diff->name, $diff->baseVersion, $nameMaxWidth, $versionMaxWidth),
             str_repeat(' ', $baseRightPad),
             str_repeat(' ', $theirsLeftPad),
             $diff->theirsVersion === null
-                ? '-'
+                ? '<fg=gray>-</>'
                 : $this->formatColumnContentWithTags($diff->name, $diff->theirsVersion, $nameMaxWidth, $versionMaxWidth),
             str_repeat(' ', $theirsRightPad)
         );
@@ -173,9 +191,10 @@ class ThreeColumnPrinter
     private function formatColumnContent(string $name, ?string $version, int $nameMaxWidth, int $versionMaxWidth): string
     {
         $truncatedName = $this->truncateText($name, $nameMaxWidth);
-        $truncatedVersion = $this->truncateText($version ?? '', $versionMaxWidth);
+        // Prioritize showing the full version, but truncate if it exceeds the maximum width
+        $versionText = $this->truncateText($version ?? '', $versionMaxWidth);
 
-        return sprintf('"%s": "%s",', $truncatedName, $truncatedVersion);
+        return sprintf('"%s": "%s",', $truncatedName, $versionText);
     }
 
     /**
@@ -190,9 +209,10 @@ class ThreeColumnPrinter
     private function formatColumnContentWithTags(string $name, ?string $version, int $nameMaxWidth, int $versionMaxWidth): string
     {
         $truncatedName = $this->truncateText($name, $nameMaxWidth);
-        $truncatedVersion = $this->truncateText($version ?? '', $versionMaxWidth);
+        // Prioritize showing the full version, but truncate if it exceeds the maximum width
+        $versionText = $this->truncateText($version ?? '', $versionMaxWidth);
 
-        return sprintf('<s>"%s"</s>: <v>"%s"</v>,', $truncatedName, $truncatedVersion);
+        return sprintf('<s>"%s"</s>: <v>"%s"</v>,', $truncatedName, $versionText);
     }
 
     /**
@@ -229,7 +249,7 @@ class ThreeColumnPrinter
             return $text;
         }
 
-        return mb_substr($text, 0, $width - 3).'...';
+        return mb_substr($text, 0, $width - 1).'…';
     }
 
     /**
