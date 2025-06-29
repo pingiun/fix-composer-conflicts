@@ -1,0 +1,15 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Pingiun\FixConflicts\FixConflictsCommand;
+use Symfony\Component\Console\Application;
+
+require __DIR__.'/../vendor/autoload.php';
+
+$app = new Application('Composer Fix Conflicts', '0.1.0');
+$fixConflictsCommand = new FixConflictsCommand();
+$app->add($fixConflictsCommand);
+$app->setDefaultCommand($fixConflictsCommand->getName(), true);
+$app->run();
