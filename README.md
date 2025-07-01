@@ -35,3 +35,13 @@ You will get an interactive prompt like this:
 [![screenshot](./screenshot.png)](./screenshot.png)
 
 If you need help with the single letter commands, you can type `?` and hit enter for help.
+
+## How does it work?
+
+After making your choices, the tool checks whether the `ours` version or the `theirs` version of the `composer.json` is closer to what you want.
+
+Then it resets both the `composer.json` and `composer.lock` files to the `ours` version, and then applies any choices you made in the interactive prompt.
+
+It applies the choices by literally just doing `composer require` commands in the background.
+
+Afterwards it adds the `composer.json` and `composer.lock` files to the git index, so you can commit them right away.
