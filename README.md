@@ -17,7 +17,13 @@ Use this command to find out where it is:
 composer global config home
 ```
 
-You could add this directory to your `PATH` variable if you want to run it easily.
+You could add this directory (with /vendor/bin appended) to your `PATH` variable if you want to run it easily.
+
+Bash single-liner if you're lazy:
+
+```bash
+echo 'export PATH="$PATH:$(composer global config home)/vendor/bin"' >> ~/.bashrc && source ~/.bashrc
+```
 
 Note, this tool requires PHP 8.3 or higher.
 
