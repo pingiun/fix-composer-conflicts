@@ -45,3 +45,13 @@ Then it resets both the `composer.json` and `composer.lock` files to the `ours` 
 It applies the choices by literally just doing `composer require` commands in the background.
 
 Afterwards it adds the `composer.json` and `composer.lock` files to the git index, so you can commit them right away.
+
+
+## Current limitations
+
+The tool does not try to keep subdependencies locked as they were in the composer.lock file.
+This is because it works by just re-requiring the tools, at which point composer will resolve the dependencies again.
+This is something I will look into in the future, as it could lead to unexpected changes in the `composer.lock` file.
+
+Another limitation is that every step is still manual, I'd like to have a way to automatically make choices.
+PRs are welcome for this!
