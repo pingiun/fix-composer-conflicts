@@ -235,7 +235,11 @@ final class FixConflictsCommand extends Command
         self::procMustSucceed(['git', 'add', '--', 'composer.json', 'composer.lock']);
 
         $output->writeln('');
-        $output->writeln('<info>Conflicts resolved, you can now commit</info>');
+        if (trim(self::procGetOutput(['git', 'diff', '--cached', '--name-only', '--diff-filter=U'])) !== '') {
+            $output->writeln('<info>Fixed composer conflicts, but you still have other conflicts you need to fix!</info>');
+        } else {
+            $output->writeln('<info>All conflicts resolved, you can now commit!</info>');
+        }
 
         return 0;
     }
