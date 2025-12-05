@@ -5,13 +5,19 @@ namespace Pingiun\FixConflicts;
 use Symfony\Component\Console\Formatter\OutputFormatterStyle;
 use Symfony\Component\Console\Output\OutputInterface;
 
-final readonly class ThreeColumnPrinter
+final class ThreeColumnPrinter
 {
     private OutputInterface $output;
 
     private int $widthPerColumn;
 
     private int $terminalWidth;
+
+    private ?string $oursName = null;
+
+    private ?string $baseName = null;
+
+    private ?string $theirsName = null;
 
     public function __construct(int $terminalWidth, OutputInterface $output)
     {
@@ -70,10 +76,13 @@ final readonly class ThreeColumnPrinter
             mb_str_pad('─', $this->widthPerColumn, '─', STR_PAD_BOTH),
             mb_str_pad('─', $this->widthPerColumn, '─', STR_PAD_BOTH)
         );
+        $ours = $this->oursName ? sprintf('Ours (%s):', $this->oursName) : 'Ours:';
+        $base = $this->baseName ? sprintf('Base (%s):', $this->baseName) : 'Base:';
+        $theirs = $this->theirsName ? sprintf('Theirs (%s):', $this->theirsName) : 'Theirs:';
         $lines[] = sprintf('│<b>%s</b>│<b>%s</b>│<b>%s</b>│',
-            str_pad('Ours:', $this->widthPerColumn, ' ', STR_PAD_BOTH),
-            str_pad('Base:', $this->widthPerColumn, ' ', STR_PAD_BOTH),
-            str_pad('Theirs:', $this->widthPerColumn, ' ', STR_PAD_BOTH)
+            str_pad($ours, $this->widthPerColumn, ' ', STR_PAD_BOTH),
+            str_pad($base, $this->widthPerColumn, ' ', STR_PAD_BOTH),
+            str_pad($theirs, $this->widthPerColumn, ' ', STR_PAD_BOTH)
         );
         $lines[] = sprintf('├%s┼%s┼%s┤',
             mb_str_pad('─', $this->widthPerColumn, '─', STR_PAD_BOTH),
@@ -270,5 +279,20 @@ final readonly class ThreeColumnPrinter
     public function getWidthPerColumn(): int
     {
         return $this->widthPerColumn;
+    }
+
+    public function setOursName(string $oursName): void
+    {
+        $this->oursName = $oursName;
+    }
+
+    public function setBaseName(string $baseName): void
+    {
+        $this->baseName = $baseName;
+    }
+
+    public function setTheirsName(string $theirsName): void
+    {
+        $this->theirsName = $theirsName;
     }
 }

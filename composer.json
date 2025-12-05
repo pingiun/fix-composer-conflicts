@@ -24,12 +24,12 @@
   },
   "autoload": {
     "psr-4": {
-      "\\Pingiun\\FixConflicts\\": "src/"
+      "Pingiun\\FixConflicts\\": "src/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "\\Pingiun\\FixConflicts\\Tests\\": "tests/"
+      "Pingiun\\FixConflicts\\Tests\\": "tests/"
     }
   },
   "bin": [

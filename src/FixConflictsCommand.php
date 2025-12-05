@@ -5,8 +5,10 @@ namespace Pingiun\FixConflicts;
 use Composer\Semver\VersionParser;
 use Override;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\Question;
 use Symfony\Component\Console\Terminal;
@@ -22,12 +24,16 @@ final class FixConflictsCommand extends Command
     protected function configure(): void
     {
         $this->setName('fix-conflicts');
-        $this->setDescription('Difficulty merging a branch that also changed composer.json? Run composer fix-conflicts. (No command line options needed, this is an interactive command)');
+        $this->addOption('base', null, InputOption::VALUE_OPTIONAL, 'Override the branch to use as the base for the composer.json, the other changes will be made to the base branch version of composer.json');
+        $this->addOption('least-as-base', null, InputOption::VALUE_NONE, 'Use the version of composer.json that needs the least changes as the base version');
+        $this->setDescription('Difficulty merging a branch that also changed composer.json? Run fix-composer-conflicts. (No command line options needed, this is an interactive command)');
     }
 
     #[Override]
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        $this->validateOptions($input);
+
         $terminal = new Terminal;
         $terminalWidth = $terminal->getWidth();
         self::chdirToRepo();
@@ -52,10 +58,21 @@ final class FixConflictsCommand extends Command
             return 1;
         }
 
-        $oursCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', 'HEAD']));
+        $oursCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', 'ORIG_HEAD']));
+        $oursRef = explode(' ', trim(self::procGetOutput(['git', 'name-rev', '--always', 'ORIG_HEAD'])), 2)[1];
+        $oursRef = preg_replace('/^remotes\/origin\//', '', $oursRef);
         $theirsCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', $conflictSource->getHeadName()]));
+        $theirsRef = explode(' ', trim(self::procGetOutput(['git', 'name-rev', '--always', '--exclude', 'HEAD', $conflictSource->getHeadName()])), 2)[1];
+        $theirsRef = preg_replace('/^remotes\/origin\//', '', $theirsRef);
 
         $printer = new ThreeColumnPrinter($terminalWidth, $output);
+        if (! preg_match('/^[a-f0-9]{40}[a-f0-9]{24}?$/', $oursRef)) {
+            $printer->setOursName($oursRef);
+        }
+        if (! preg_match('/^[a-f0-9]{40}[a-f0-9]{24}?$/', $theirsRef)) {
+            $printer->setTheirsName($theirsRef);
+        }
+
         /** @var QuestionHelper $helper */
         $helper = $this->getHelper('question');
 
@@ -121,31 +138,97 @@ final class FixConflictsCommand extends Command
 
         $output->writeln('');
         $output->writeln('<info>Applying '.count($resolutions).' resolutions</info>');
-        $mostUsed = array_count_values(array_map(fn (DiffResolution $x) => $x->choice->name, $resolutions));
-        if (
-            ($mostUsed[ResolutionChoice::OURS->name] ?? 0) >= ($mostUsed[ResolutionChoice::THEIRS->name] ?? 0)
-        ) {
-            $packageSetBase = ResolutionChoice::OURS;
-            self::procMustSucceed(['git', 'restore', "--source={$oursCommit}", '--', 'composer.json', 'composer.lock']);
+
+        $hasMainBranch = in_array($oursRef, ['main', 'master']) || in_array($theirsRef, ['main', 'master']);
+
+        if (($base = $input->getOption('base')) != null) {
+            if ($oursRef === $base) {
+                $packageSetBase = ResolutionChoice::THEIRS;
+            } elseif ($theirsRef === $base) {
+                $packageSetBase = ResolutionChoice::OURS;
+            } else {
+                throw new \RuntimeException('Base branch not found');
+            }
+        } elseif ($input->getOption('least-as-base') || ! $hasMainBranch) {
+            $mostUsed = array_count_values(array_map(fn (DiffResolution $x) => $x->choice->name, $resolutions));
+            if (
+                ($mostUsed[ResolutionChoice::OURS->name] ?? 0) >= ($mostUsed[ResolutionChoice::THEIRS->name] ?? 0)
+            ) {
+                $packageSetBase = ResolutionChoice::OURS;
+            } else {
+                $packageSetBase = ResolutionChoice::THEIRS;
+            }
         } else {
-            $packageSetBase = ResolutionChoice::THEIRS;
-            self::procMustSucceed(['git', 'restore', "--source={$theirsCommit}", '--', 'composer.json', 'composer.lock']);
+            if (in_array($oursRef, ['main', 'master'], true)) {
+                $packageSetBase = ResolutionChoice::OURS;
+            } elseif (in_array($theirsRef, ['main', 'master'], true)) {
+                $packageSetBase = ResolutionChoice::THEIRS;
+            } else {
+                throw new \RuntimeException('Main branch not found');
+            }
         }
 
-        try {
-            foreach ($resolutions as $resolution) {
-                if ($resolution->choice === $packageSetBase) {
-                    continue;
-                }
-                self::procMustSucceed(self::buildCommand($resolution));
+        $baseComposerJson = $composerJsons->generateComposerJsonWithPackageSetBase($packageSetBase);
+        file_put_contents('composer.json', $baseComposerJson);
+        if ($packageSetBase === ResolutionChoice::OURS) {
+            self::procMustSucceed(['git', 'restore', "--source={$oursCommit}", '--', 'composer.lock']);
+        } else {
+            self::procMustSucceed(['git', 'restore', "--source={$theirsCommit}", '--', 'composer.lock']);
+        }
+
+        $requirePackages = [];
+        $requireDevPackages = [];
+        $removePackages = [];
+        $removeDevPackages = [];
+        foreach ($resolutions as $resolution) {
+            if ($resolution->choice === $packageSetBase) {
+                continue;
             }
+            if ($resolution->getAction() === 'remove') {
+                if ($resolution->isDevDependency) {
+                    $removeDevPackages[] = $resolution->getPackage();
+                } else {
+                    $removePackages[] = $resolution->getPackage();
+                }
+            } else {
+                if ($resolution->isDevDependency) {
+                    $requireDevPackages[] = sprintf("%s:%s", $resolution->getPackage(), $resolution->getVersion());
+                } else {
+                    $requirePackages[] = sprintf("%s:%s", $resolution->getPackage(), $resolution->getVersion());
+                }
+            }
+        }
+
+        $progressBar = new ProgressBar($output, array_sum([count($removePackages) > 0, count($removeDevPackages) > 0, count($requirePackages) > 0, count($requireDevPackages) > 0]));
+
+        try {
+            if ($removePackages) {
+                self::procMustSucceed(self::buildRemoveCommand($removePackages, false));
+                $progressBar->advance();
+            }
+            if ($removeDevPackages) {
+                self::procMustSucceed(self::buildRemoveCommand($removeDevPackages, true));
+                $progressBar->advance();
+            }
+            if ($requirePackages) {
+                self::procMustSucceed(self::buildRequireCommand($requirePackages, false));
+                $progressBar->advance();
+            }
+            if ($requireDevPackages) {
+                self::procMustSucceed(self::buildRequireCommand($requireDevPackages, true));
+                $progressBar->advance();
+            }
+            $progressBar->finish();
         } catch (ProcessFailedException $e) {
+            $progressBar->clear();
             $output->writeln('Failed to apply resolutions, aborting');
             $output->writeln($e->getNiceMessage());
             $output->writeln($e->output);
 
             // Restore conflict markers
             self::procMustSucceed(['git', 'restore', '--merge', '--', 'composer.json', 'composer.lock']);
+
+            return 1;
         }
 
         // If everything went well, add the two files to the index
@@ -220,24 +303,22 @@ final class FixConflictsCommand extends Command
      *
      * @param  string  $format  sprintf format string, with any number of named arguments
      * @param  array<string, mixed>  $args  array of [ 'arg_name' => 'arg value', ... ] replacements to be made
-     * @return string|false result of sprintf call, or bool false on error
+     * @return string result of sprintf call
      */
-    private static function sprintfn($format, array $args = []): string|false
+    private static function sprintfn($format, array $args = []): string
     {
         // map of argument names to their corresponding sprintf numeric argument value
         $arg_nums = array_slice(array_flip(array_keys([0 => 0] + $args)), 1);
 
         // find the next named argument. each search starts at the end of the previous replacement.
         for ($pos = 0; preg_match('/(?<=%)\(([a-zA-Z_]\w*)\)/', $format, $match, PREG_OFFSET_CAPTURE, $pos);) {
-            $arg_pos = $match[0][1];
+            $arg_pos = intval($match[0][1]);
             $arg_len = strlen($match[0][0]);
             $arg_key = $match[1][0];
 
             // programmer did not supply a value for the named argument found in the format string
             if (! array_key_exists($arg_key, $arg_nums)) {
-                trigger_error("sprintfn(): Missing argument '{$arg_key}'", E_USER_WARNING);
-
-                return false;
+                throw new \InvalidArgumentException("sprintfn(): Missing argument '{$arg_key}'");
             }
 
             // replace the named argument with the corresponding numeric one
@@ -304,22 +385,40 @@ final class FixConflictsCommand extends Command
     /**
      * @return string[]
      */
-    private static function buildCommand(DiffResolution $resolution)
+    private static function buildRequireCommand(array $packages, bool $isDev)
     {
-        $action = $resolution->getAction();
-        $package = $resolution->getPackage();
-
-        if ($action === 'remove') {
-            return ['composer', $action, $package];
-        }
-
-        $command = ['composer', $action];
-        if ($resolution->isDevDependency) {
+        $command = [self::composerBinary(), 'remove', '--ignore-platform-reqs'];
+        if ($isDev) {
             $command[] = '--dev';
         }
-        $command[] = $package;
-        $command[] = $resolution->getVersion();
 
-        return $command;
+        return array_merge($command, $packages);
+    }
+
+    private static function buildRemoveCommand(array $packages, bool $isDev)
+    {
+        $command = [self::composerBinary(), 'remove', '--ignore-platform-reqs'];
+        if ($isDev) {
+            $command[] = '--dev';
+        }
+
+        return array_merge($command, $packages);
+    }
+
+    private function validateOptions(InputInterface $input)
+    {
+        if ($input->getOption('base') && $input->getOption('least-as-base')) {
+            throw new \InvalidArgumentException('Cannot use --base and --least-as-base together');
+        }
+    }
+
+    private static function composerBinary(): string
+    {
+        $composer = getenv('COMPOSER_COMMAND');
+        if ($composer) {
+            return $composer;
+        }
+
+        return 'composer';
     }
 }

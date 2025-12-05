@@ -74,3 +74,4 @@ assertNotOk grep '>>>>>>' composer.lock
 # Check that the files were added
 assertNotOk sh -c 'git diff --cached --name-only --diff-filter=U | grep composer.json'
 assertNotOk sh -c 'git diff --cached --name-only --diff-filter=U | grep composer.lock'
+echo "Test succeeded"
