@@ -51,19 +51,21 @@ final class FixConflictsCommand extends Command
             ConflictSource::CHERRY_PICK => $output->writeln('<info>You are cherry-picking, here `ours` is the tree you just had checked out. `theirs` is the tree you are cherry-picking. `base` is the common ancestor of the two trees.</info>'),
         };
 
-        $composerJsons = self::getBothComposerJsons();
-        if (! $composerJsons->isOnlyDiffInRequirements()) {
-            $output->writeln('Conflicts are not only in requirements, sorry you have to fix this one manually');
-
-            return 1;
-        }
-
         $oursCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', 'ORIG_HEAD']));
         $oursRef = explode(' ', trim(self::procGetOutput(['git', 'name-rev', '--always', 'ORIG_HEAD'])), 2)[1];
         $oursRef = preg_replace('/^remotes\/origin\//', '', $oursRef);
         $theirsCommit = trim(self::procGetOutput(['git', 'rev-parse', '--verify', $conflictSource->getHeadName()]));
         $theirsRef = explode(' ', trim(self::procGetOutput(['git', 'name-rev', '--always', '--exclude', 'HEAD', $conflictSource->getHeadName()])), 2)[1];
         $theirsRef = preg_replace('/^remotes\/origin\//', '', $theirsRef);
+        $baseCommit = trim(self::procGetOutput(['git', 'merge-base', $oursCommit, $theirsCommit]));
+
+        $composerJsons = self::getBothComposerJsons(baseCommit: $baseCommit, oursCommit: $oursCommit, theirsCommit: $theirsCommit);
+        if (! $composerJsons->isOnlyDiffInRequirements()) {
+            $output->writeln('Conflicts are not only in requirements, sorry you have to fix this one manually');
+
+            return 1;
+        }
+        $composerLocks = self::getBothComposerLocks(baseCommit: $baseCommit, oursCommit: $oursCommit, theirsCommit: $theirsCommit);
 
         $printer = new ThreeColumnPrinter($terminalWidth, $output);
         if (! preg_match('/^[a-f0-9]{40}[a-f0-9]{24}?$/', $oursRef)) {
@@ -180,7 +182,9 @@ final class FixConflictsCommand extends Command
         $requireDevPackages = [];
         $removePackages = [];
         $removeDevPackages = [];
+        $resolutionMap = [];
         foreach ($resolutions as $resolution) {
+            $resolutionMap[$resolution->diff->name] = $resolution->choice;
             if ($resolution->choice === $packageSetBase) {
                 continue;
             }
@@ -234,6 +238,21 @@ final class FixConflictsCommand extends Command
         // If everything went well, add the two files to the index
         self::procMustSucceed(['git', 'add', '--', 'composer.json', 'composer.lock']);
 
+        $composerLockContents = file_get_contents('composer.lock');
+        if ($composerLockContents === false) {
+            throw new \RuntimeException('Could not read composer.lock');
+        }
+        $composerLockData = json_decode($composerLockContents, true, flags: JSON_THROW_ON_ERROR);
+        $diffs = $composerLocks->diffWithResultingLock($composerLockData);
+        $composerJsonContents = file_get_contents('composer.json');
+        if ($composerJsonContents === false) {
+            throw new \RuntimeException('Could not read composer.json');
+        }
+        $composerJson = json_decode($composerJsonContents, true, flags: JSON_THROW_ON_ERROR);
+        $requires = $composerJson['require'] ?? [];
+        $requireDevs = $composerJson['require-dev'] ?? [];
+        self::reportDiffs($output, $composerLockData, $diffs, $requires, $requireDevs);
+
         $output->writeln('');
         if (trim(self::procGetOutput(['git', 'diff', '--cached', '--name-only', '--diff-filter=U'])) !== '') {
             $output->writeln('<info>Fixed composer conflicts, but you still have other conflicts you need to fix!</info>');
@@ -286,13 +305,22 @@ final class FixConflictsCommand extends Command
         throw new \RuntimeException('Could not determine conflict source');
     }
 
-    private static function getBothComposerJsons(): ConflictingComposerJson
+    private static function getBothComposerJsons(string $baseCommit, string $oursCommit, string $theirsCommit): ConflictingComposerJson
     {
-        $base = self::procGetOutput(['git', 'show', ':1:composer.json']);
-        $ours = self::procGetOutput(['git', 'show', ':2:composer.json']);
-        $theirs = self::procGetOutput(['git', 'show', ':3:composer.json']);
+        $base = self::procGetOutput(['git', 'show', "$baseCommit:composer.json"]);
+        $ours = self::procGetOutput(['git', 'show', "$oursCommit:composer.json"]);
+        $theirs = self::procGetOutput(['git', 'show', "$theirsCommit:composer.json"]);
 
         return new ConflictingComposerJson($base, $ours, $theirs);
+    }
+
+    private static function getBothComposerLocks(string $baseCommit, string $oursCommit, string $theirsCommit): ConflictingComposerLock
+    {
+        $base = self::procGetOutput(['git', 'show', "$baseCommit:composer.lock"]);
+        $ours = self::procGetOutput(['git', 'show', "$oursCommit:composer.lock"]);
+        $theirs = self::procGetOutput(['git', 'show', "$theirsCommit:composer.lock"]);
+
+        return new ConflictingComposerLock($base, $ours, $theirs);
     }
 
     /**
@@ -387,9 +415,11 @@ final class FixConflictsCommand extends Command
     }
 
     /**
-     * @return string[]
+     * @param array<string> $packages
+     * @param bool $isDev
+     * @return array<string>
      */
-    private static function buildRequireCommand(array $packages, bool $isDev)
+    private static function buildRequireCommand(array $packages, bool $isDev): array
     {
         $command = [self::composerBinary(), 'remove', '--ignore-platform-reqs'];
         if ($isDev) {
@@ -399,7 +429,12 @@ final class FixConflictsCommand extends Command
         return array_merge($command, $packages);
     }
 
-    private static function buildRemoveCommand(array $packages, bool $isDev)
+    /**
+     * @param array<string> $packages
+     * @param bool $isDev
+     * @return array<string>
+     */
+    private static function buildRemoveCommand(array $packages, bool $isDev): array
     {
         $command = [self::composerBinary(), 'remove', '--ignore-platform-reqs'];
         if ($isDev) {
@@ -409,7 +444,7 @@ final class FixConflictsCommand extends Command
         return array_merge($command, $packages);
     }
 
-    private function validateOptions(InputInterface $input)
+    private function validateOptions(InputInterface $input): void
     {
         if ($input->getOption('base') && $input->getOption('least-as-base')) {
             throw new \InvalidArgumentException('Cannot use --base and --least-as-base together');
@@ -424,5 +459,102 @@ final class FixConflictsCommand extends Command
         }
 
         return 'composer';
+    }
+
+    private static function parentMapping(array $lock, array $directRequires, array $directDevRequires): array
+    {
+        $parentMapping = [];
+        foreach ($lock['packages'] as $package) {
+            // Loop through the requires and require-devs
+            foreach ($package['require'] ?? [] as $dependency => $constraint) {
+                if (!array_key_exists($dependency, $parentMapping)) {
+                    $parentMapping[$dependency] = ['parents' => [], 'dev-parent' => []];
+                }
+                $parentMapping[$dependency]['parents'][$package['name']] = true;
+            }
+
+        }
+        foreach ($lock['packages-dev'] as $package) {
+            foreach ($package['require-dev'] ?? [] as $dependency => $constraint) {
+                if (!array_key_exists($dependency, $parentMapping)) {
+                    $parentMapping[$dependency] = ['parents' => [], 'dev-parent' => []];
+                }
+                $parentMapping[$dependency]['dev-parent'][$package['name']] = true;
+            }
+        }
+        foreach ($parentMapping as $packageName => $package) {
+            $package['parents'] = array_keys($package['parents']);
+            if (in_array($packageName, $directRequires, true)) {
+                $package['direct-requires'] = true;
+            } else {
+                $package['direct-requires'] = false;
+            }
+            $package['dev-parent'] = array_keys($package['dev-parent']);
+            if (in_array($packageName, $directDevRequires, true)) {
+                $package['direct-dev-requires'] = true;
+            } else {
+                $package['direct-dev-requires'] = false;
+            }
+        }
+        return $parentMapping;
+    }
+
+    /**
+     * @param OutputInterface $output
+     * @param array $composerLockData
+     * @param array<string, array{'name': string, 'base': string|null, 'ours': string|null, 'theirs': string|null, 'result': string|null}> $diffs
+     * @param array<string, string> $requires
+     * @param array<string, string> $requireDevs
+     * @return void
+     */
+    public static function reportDiffs(OutputInterface $output, array $composerLockData, array $diffs, array $requires, array $requireDevs)
+    {
+        $parents = self::parentMapping($composerLockData, array_keys($requires), array_keys($requireDevs));
+        foreach ($diffs as $name => $diff) {
+            // If the result does not correspond to either the ours, theirs or base version. This is a new untested version and we want to report it
+            // The array contains base => version, ours => version, theirs => version, result => version
+            if ($diff['result'] != null && $diff['result'] !== $diff['ours'] && $diff['result'] !== $diff['theirs'] && $diff['result'] !== $diff['base']) {
+                self::reportDiff($output, $name, $diff, $parents);
+            }
+            if ($diff['result'] === null && $diff['ours'] !== null && $diff['theirs'] !== null) {
+
+            }
+        }
+    }
+
+    public static function reportDiff(OutputInterface $output, string $name, array $diffs, array $parents): void
+    {
+        // Print a tree to show the parents recursively
+        $output->writeln("→ {$name}");
+        self::printTree($output, $parents[$name], $diffs, $parents, depth: 0);
+
+    }
+    public static function printTree(OutputInterface $output, array $node, array $diffs, array $parents, int $depth): void
+    {
+        $indent = str_repeat('  ', $depth + 1);
+        if ($node['direct-requires']) {
+            $output->writeln("{$indent}└─ (direct dependency)");
+        }
+        if ($node['direct-dev-requires']) {
+            $output->writeln("{$indent}└─ (direct dev dependency)");
+        }
+
+        $parentsList = array_unique(array_merge($node['parents'] ?? [], $node['dev-parent'] ?? []));
+        foreach ($parentsList as $i => $parent) {
+            $isLast = $i === count($parentsList) - 1;
+            $output->writeln(sprintf(
+                '%s%s %s',
+                $indent,
+                $isLast ? '└─' : '├─',
+                $parent
+            ));
+
+            if (isset($parents[$parent])) {
+                // Prevent infinite recursion by limiting depth
+                if ($depth < 5) {
+                    self::printTree($output, $parents[$parent], $diffs, $parents, $depth + 1);
+                }
+            }
+        }
     }
 }

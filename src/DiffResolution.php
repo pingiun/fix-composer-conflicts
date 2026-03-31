@@ -59,4 +59,25 @@ final readonly class DiffResolution
 
         return $highestVersion->getPrettyString();
     }
+
+    /**
+     * When the choice is NEWEST, this returns the newest choice among the three versions.
+     * @return ResolutionChoice
+     */
+    public function getNewestChoice(): ResolutionChoice
+    {
+        if ($this->choice !== ResolutionChoice::NEWEST) {
+            return $this->choice;
+        }
+        $newestVersion = self::getNewestVersion([$this->diff->oursVersion, $this->diff->baseVersion, $this->diff->theirsVersion]);
+        if ($newestVersion === $this->diff->oursVersion) {
+            return ResolutionChoice::OURS;
+        } elseif ($newestVersion === $this->diff->baseVersion) {
+            return ResolutionChoice::BASE;
+        } elseif ($newestVersion === $this->diff->theirsVersion) {
+            return ResolutionChoice::THEIRS;
+        } else {
+            throw new \LogicException('Unexpected newest version');
+        }
+    }
 }
